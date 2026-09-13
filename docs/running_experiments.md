@@ -26,6 +26,8 @@ For a fast end-to-end check, use `--trials 2 --steps 512 --evaluation-episodes 2
 
 ## Start hanging down and learn to swing up
 
+If you already have a successful balancing controller, the newer [curriculum and reward-search workflow](curriculum.md) can transfer its actor weights, gradually increase reset difficulty, and optionally let the API tune training rewards under a fixed evaluation objective. The commands below remain the original fresh-weight swing-up baseline.
+
 Add `--task swingup` to start every rod near downward (angle zero). The default `--task balance` still starts near upright (angle pi). Both tasks use the same cart force, physical model and observations. One through four rods are supported with `--links`.
 
 ```sh
@@ -43,6 +45,8 @@ Success requires the final two seconds of the 12-second episode to remain contin
 Swing-up has its own versioned experiment evidence, separate from near-upright balance results. Existing balance memories and models remain readable. Each new swing-up candidate trains from fresh weights. The API is told the new goal and selection rules. This task may require much more training and exploration than the small initial runs; trying one rod first is useful for diagnosing the learning setup.
 
 ## Continue training an existing controller
+
+For a curriculum experiment, continue with `python -m cart_pendulum.curriculum` instead; see the [curriculum guide](curriculum.md). The command in this section keeps the original task and training settings fixed.
 
 Use this when you want to give a promising controller more experience instead of starting a fresh network:
 

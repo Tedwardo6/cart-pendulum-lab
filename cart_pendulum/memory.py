@@ -22,13 +22,14 @@ class ExperimentMemory:
     def __init__(self, path=DEFAULT_MEMORY):
         self.path = Path(path)
 
-    def records(self, config):
+    def records(self, config, evaluation_version=None):
         if not self.path.exists():
             return []
         data = json.loads(self.path.read_text())
         if data.get("version") != 1:
             raise ValueError("Unsupported experiment memory version.")
         return [r for r in data["records"] if r["task_version"] == task_version(config)
+                and r.get("evaluation_version") == evaluation_version
                 and asdict(EnvConfig(**r["environment"])) == asdict(config)]
 
     def remember(self, run, record):
@@ -46,17 +47,22 @@ class ExperimentMemory:
                  "initial_steps": training.get("initial_steps", 0),
                  "added_steps": training.get("added_steps", training["actual_steps"]),
                  "parent_checkpoint": config.get("parent_checkpoint"),
+                 "evaluation_version": config.get("evaluation_version"),
+                 "training_spec": config.get("training_spec"),
+                 "probes": record.get("probes"), "accepted_for_training": record.get("accepted_for_training"),
                  "validation_seeds": [e["seed"] for e in metrics["episodes"]],
                  "validation": {k: metrics[k] for k in ("task", "mean_duration", "mean_return", "success_rate",
-                                                       "mean_upright_time", "mean_final_hold") if k in metrics},
+                                                       "mean_upright_time", "mean_final_hold", "evaluation_version", "mean_common_score") if k in metrics},
                  "source_run": str(run.resolve()), "source_trial": record["trial"]}
         self._save(entry)
 
-    def remember_failure(self, run, trial, config, phase, error_type, network=None, rationale=""):
+    def remember_failure(self, run, trial, config, phase, error_type, network=None, rationale="",
+                         evaluation_version=None, training_spec=None):
         identity = hashlib.sha256(str((Path(run) / trial).resolve()).encode()).hexdigest()
         self._save({"id": identity, "status": "failed", "task_version": task_version(config),
             "environment": asdict(config), "source_run": str(Path(run).resolve()), "source_trial": trial,
             "phase": phase, "error_type": error_type, "network": asdict(network) if network else None,
+            "evaluation_version": evaluation_version, "training_spec": training_spec,
             "rationale": rationale})
 
     def _save(self, entry):
@@ -86,7 +92,8 @@ def proposal_evidence(records, limit=8):
     for record in candidates:
         # Exclude local filesystem paths; include conditions needed to interpret scores.
         compact = {k: record.get(k) for k in ("id", "network", "training_seed", "requested_steps",
-                   "actual_steps", "training_mode", "initial_steps", "added_steps", "validation_seeds", "validation")}
+                   "actual_steps", "training_mode", "initial_steps", "added_steps", "validation_seeds", "validation",
+                   "training_spec", "probes", "accepted_for_training")}
         compact["rationale"] = record.get("rationale", "")[:600]
         if compact not in selected:
             selected.append(compact)
@@ -96,6 +103,7 @@ def proposal_evidence(records, limit=8):
 
 def proposal_failures(records):
     return [{"network": r.get("network"), "phase": r["phase"], "error_type": r["error_type"],
+             "training_spec": r.get("training_spec"),
              "rationale": r.get("rationale", "")[:300]} for r in records if r.get("status") == "failed"][-3:]
 
 

@@ -17,10 +17,12 @@ def main():
     args = parser.parse_args()
     if not 1 <= args.episodes <= 100:
         parser.error("Use 1–100 episodes.")
-    config = EnvConfig(**json.loads((args.run / "best_config.json").read_text())["environment"])
+    saved = json.loads((args.run / "best_config.json").read_text())
+    config = EnvConfig(**saved["environment"])
     model = PPO.load(args.run / "best_model.zip", device="cpu")
     args.output.mkdir(parents=True, exist_ok=False)
-    results = evaluate(model, config, range(args.seed, args.seed + args.episodes), args.output / "trajectory.csv")
+    results = evaluate(model, config, range(args.seed, args.seed + args.episodes), args.output / "trajectory.csv",
+                       evaluation_version=saved.get("evaluation_version"))
     write_json(args.output / "evaluation.json", results)
     print(json.dumps(results, indent=2))
 

@@ -39,20 +39,28 @@ def write_json(path, value):
     temporary.replace(path)
 
 
-def evaluate(policy, config, seeds, trajectory=None):
+def evaluate(policy, config, seeds, trajectory=None, *, evaluation_version=None, reset_config=None):
     """Same initial conditions for every candidate; deterministic actions."""
     results = []
-    env = CartPendulumEnv(config)
+    from .training_tasks import CurriculumEnv, EVALUATION_VERSION, common_score
+    if evaluation_version not in (None, EVALUATION_VERSION):
+        raise ValueError("Unknown evaluation version.")
+    if evaluation_version is not None and config.task != "swingup":
+        raise ValueError("The fixed swing-up evaluator requires task=swingup.")
+    env = CartPendulumEnv(config) if reset_config is None else CurriculumEnv(config, reset_config)
     for index, seed in enumerate(seeds):
         obs, _ = env.reset(seed=int(seed))
         history = [[0., *env.state, 0.]]
         total_reward, max_angle, force_squared, elapsed = 0., 0., 0., 0.
+        common_total = 0.
         while True:
             action = np.zeros(1) if policy is None else policy.predict(obs, deterministic=True)[0]
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             max_angle = max(max_angle, info["max_angle_error"])
             delta = info["time"] - elapsed
+            if evaluation_version is not None:
+                common_total += common_score(env.state, config) * delta
             force_squared += info["force"]**2 * delta
             elapsed = info["time"]
             history.append([elapsed, *env.state, info["force"]])
@@ -61,28 +69,35 @@ def evaluate(policy, config, seeds, trajectory=None):
         results.append({"seed": int(seed), "duration": elapsed, "return": total_reward,
                         "success": info["success"], "end_reason": info["end_reason"],
                         "upright_time": info["upright_time"], "final_hold": info["final_hold"],
+                        "common_score": common_total / config.duration,
                         "max_angle_error": max_angle, "rms_force": float(np.sqrt(force_squared / max(elapsed, 1e-9)))})
         if trajectory is not None and index == 0:
             header = ["time", "x", *[f"theta_{i+1}" for i in range(config.n_links)],
                       "x_dot", *[f"omega_{i+1}" for i in range(config.n_links)], "force"]
             np.savetxt(trajectory, history, delimiter=",", header=",".join(header), comments="")
     env.close()
-    return {"task": config.task,
+    metrics = {"task": config.task,
             "mean_upright_time": float(np.mean([r["upright_time"] for r in results])),
             "mean_final_hold": float(np.mean([r["final_hold"] for r in results])),
             "mean_duration": float(np.mean([r["duration"] for r in results])),
             "success_rate": float(np.mean([r["success"] for r in results])),
             "mean_return": float(np.mean([r["return"] for r in results])), "episodes": results}
+    if evaluation_version is not None:
+        metrics.update(evaluation_version=evaluation_version,
+                       mean_common_score=float(np.mean([r["common_score"] for r in results])))
+    return metrics
 
 
 def score(metrics):
     """Task-specific selection. Hanging for the full episode is not swing-up success."""
     if metrics.get("task") == "swingup":
-        return metrics["success_rate"], metrics["mean_final_hold"], metrics["mean_return"]
+        return (metrics["success_rate"], metrics["mean_final_hold"],
+                metrics["mean_common_score"] if metrics.get("evaluation_version") else metrics["mean_return"])
     return metrics["mean_duration"], metrics["mean_return"]
 
 
-def train(config, network, steps, seed, output, deadline=None, checkpoint=None, report_every=0):
+def train(config, network, steps, seed, output, deadline=None, checkpoint=None, report_every=0,
+          training_spec=None, update_hyperparameters=False, reset_critic=False):
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback
     from stable_baselines3.common.monitor import Monitor
@@ -100,7 +115,12 @@ def train(config, network, steps, seed, output, deadline=None, checkpoint=None, 
                 print(f"  training: {added:,}/{steps:,} additional steps", flush=True)
             return not ((output.parent / "STOP").exists() or (deadline and time.monotonic() >= deadline))
 
-    env = Monitor(CartPendulumEnv(config), str(output / "episodes.csv"))
+    if training_spec is None:
+        training_env = CartPendulumEnv(config)
+    else:
+        from .training_tasks import CurriculumEnv, RewardConfig, ResetConfig
+        training_env = CurriculumEnv(config, ResetConfig(**training_spec["reset"]), RewardConfig(**training_spec["reward"]))
+    env = Monitor(training_env, str(output / "episodes.csv"))
     if checkpoint is not None:
         policy = PPO.load(checkpoint, env=env, device="cpu")
         # New episodes/exploration stream, while weights and Adam state are retained.
@@ -108,6 +128,13 @@ def train(config, network, steps, seed, output, deadline=None, checkpoint=None, 
         if policy.n_steps != 512 or policy.n_envs != 1:
             env.close()
             raise ValueError("Continuation expects this project's single-environment, 512-step PPO setup.")
+        if update_hyperparameters:
+            policy.learning_rate = network.learning_rate
+            policy._setup_lr_schedule()
+            policy.ent_coef, policy.n_epochs, policy.gamma = network.entropy_coefficient, network.n_epochs, network.gamma
+            policy.rollout_buffer.gamma = network.gamma
+        if reset_critic:
+            reset_value_network(policy)
     else:
         policy = PPO("MlpPolicy", env, policy_kwargs={"net_arch": list(network.hidden_sizes),
                  "activation_fn": torch.nn.Tanh if network.activation == "tanh" else torch.nn.ReLU},
@@ -119,6 +146,8 @@ def train(config, network, steps, seed, output, deadline=None, checkpoint=None, 
                "seed": seed, "requested_steps": initial_steps + steps,
                "requested_additional_steps": steps, "initial_steps": initial_steps,
                "training_mode": "continued" if checkpoint is not None else "fresh",
+               "training_spec": training_spec, "critic_reset": reset_critic,
+               "evaluation_version": "swingup-fixed-v2" if training_spec is not None else None,
                "parent_checkpoint": str(Path(checkpoint).resolve()) if checkpoint is not None else None})
     started = time.monotonic()
     interrupted = False
@@ -145,3 +174,16 @@ def train(config, network, steps, seed, output, deadline=None, checkpoint=None, 
     if policy._n_updates == initial_updates:
         raise RuntimeError("Stopped before any neural-network weight updates; untrained checkpoint saved.")
     return policy
+
+
+def reset_value_network(model):
+    """A changed reward changes the critic's target, not the actor's learned behavior."""
+    import torch
+    modules = (model.policy.mlp_extractor.value_net, model.policy.value_net)
+    for container in modules:
+        for layer in container.modules():
+            if isinstance(layer, torch.nn.Linear):
+                torch.nn.init.orthogonal_(layer.weight, gain=1. if container is model.policy.value_net else np.sqrt(2))
+                torch.nn.init.zeros_(layer.bias)
+        for parameter in container.parameters():
+            model.policy.optimizer.state.pop(parameter, None)

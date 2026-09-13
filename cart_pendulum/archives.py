@@ -31,6 +31,8 @@ def retain_architecture(run, record):
     best = json.loads(best_path.read_text()) if best_path.exists() else None
     comparison = {"environment": config["environment"],
                   "validation_seeds": [episode["seed"] for episode in metrics["episodes"]]}
+    if metrics.get("evaluation_version"):
+        comparison["evaluation_version"] = metrics["evaluation_version"]
     if best and best["comparison"] != comparison:
         raise ValueError("Cannot rank models tested with different environments or validation seeds.")
 
@@ -38,7 +40,10 @@ def retain_architecture(run, record):
               "network": config["network"], "training_seed": config["seed"],
               "validation": metrics, "comparison": comparison,
               "rationale": record.get("rationale", ""),
-              "selection_rule": ("Validation success rate, final settled hold, then return; ties keep the incumbent."
+              "training_spec": config.get("training_spec"),
+              "selection_rule": ("Validation success rate, final settled hold, then fixed common score."
+                                 if metrics.get("evaluation_version") else
+                                 "Validation success rate, final settled hold, then return; ties keep the incumbent."
                                  if metrics.get("task") == "swingup" else
                                  "Mean validation survival first, mean return second; ties keep the incumbent.")}
     improved = best is None or score(metrics) > score(best["validation"])
@@ -70,6 +75,7 @@ def retain_architecture(run, record):
                            "mean_return": best["validation"]["mean_return"],
                            "success_rate": best["validation"].get("success_rate"),
                            "mean_final_hold": best["validation"].get("mean_final_hold"),
+                           "mean_common_score": best["validation"].get("mean_common_score"),
                            "model": f"{architecture}/best_model.zip"}
     write_json(index_path, index)
     return destination

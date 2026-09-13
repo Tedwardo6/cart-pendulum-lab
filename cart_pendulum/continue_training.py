@@ -39,6 +39,8 @@ def continue_training(output, source, *, blocks=4, steps=65536, max_minutes=60,
         raise ValueError("Checkpoint must be best or latest.")
     source, output = Path(source), Path(output)
     saved = json.loads((source / "best_config.json").read_text())
+    if saved.get("evaluation_version"):
+        raise ValueError("Use python -m cart_pendulum.curriculum to continue curriculum experiments.")
     config, network = EnvConfig(**saved["environment"]), NetworkConfig(**saved["network"])
     start_config = json.loads((source / f"{checkpoint}_config.json").read_text())
     if EnvConfig(**start_config["environment"]) != config or NetworkConfig(**start_config["network"]) != network:
