@@ -101,10 +101,13 @@ def train(config, network, steps, seed, output, deadline=None):
                  n_steps=512, batch_size=64, seed=seed, device="cpu", verbose=0)
     started = time.monotonic()
     interrupted = False
+    failure = None
     try:
         policy.learn(total_timesteps=steps, callback=BudgetCallback())
     except KeyboardInterrupt:
         interrupted = True
+    except Exception as error:
+        failure = error
     finally:
         policy.save(output / "model.zip")
         env.close()
@@ -112,6 +115,8 @@ def train(config, network, steps, seed, output, deadline=None):
                "gradient_updates": policy._n_updates,
                "seconds": time.monotonic() - started, "interrupted": interrupted,
                "completed_requested_steps": policy.num_timesteps >= steps})
+    if failure is not None:
+        raise failure
     if interrupted:
         raise KeyboardInterrupt
     if policy._n_updates == 0:
