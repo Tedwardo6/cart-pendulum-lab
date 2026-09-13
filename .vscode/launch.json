@@ -1,0 +1,38 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Lesson 1: inspect the mass matrix",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "examples.lesson_01_mass_matrix",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Train: short local experiment (no API)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "cart_pendulum.experiments",
+      "args": ["--links", "${input:links}", "--trials", "2", "--steps", "512", "--evaluation-episodes", "2", "--max-minutes", "5", "--proposer", "local", "--output", "runs/${input:runName}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "Run all tests",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "unittest",
+      "args": ["discover", "-s", "tests", "-v"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ],
+  "inputs": [
+    {"id": "links", "type": "pickString", "description": "Number of rods", "options": ["2", "3", "4"], "default": "2"},
+    {"id": "runName", "type": "promptString", "description": "New output folder name (must not already exist)", "default": "vscode-test-001"}
+  ]
+}
