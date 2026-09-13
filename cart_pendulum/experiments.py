@@ -11,6 +11,7 @@ import numpy as np
 
 from .environment import EnvConfig
 from .learning import NetworkConfig, evaluate, score, train, write_json
+from .archives import retain_architecture
 
 
 class ApiBudget:
@@ -150,6 +151,8 @@ def run_experiments(output, config, *, trials=3, steps=32768, seed=7,
             record = {"trial": trial.name, "network": asdict(network), "rationale": rationale, "validation": metrics}
             history.append(record)
             write_json(trial / "validation.json", metrics)
+            # Save each structure's winner even if it loses to another structure.
+            retain_architecture(output, record)
             if best is None or score(metrics) > score(best["validation"]):
                 best = record
                 shutil.copyfile(trial / "model.zip", output / "best_model.zip.tmp")

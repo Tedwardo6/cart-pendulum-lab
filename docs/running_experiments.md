@@ -52,6 +52,8 @@ Actual token usage and estimated cost appear in `api_*.json`; conservative reser
 
 ## Saved outputs
 
+- `architectures/mlp-tanh-64x64/` (and one folder for every other tested structure): that architecture's `best_model.zip`, `best_config.json`, `best_result.json`, training details, validation trajectory and `trials.json`. Layer sizes in order and activation define a structure; different learning rates or training settings compete within that structure. Rankings use the same validation scores as overall selection. These archives are per experiment run, so different pendulum tasks are kept separate.
+- `architectures/index.json`: all tested structures, their best trials and scores. Every completed trial remains in its original folder too. "Best" refers to the best evaluated trial checkpoint, not an unmeasured moment during training.
 - `best_model.zip`: the best trained actor/critic and weights among completed candidates; reloadable by SB3.
 - `best_config.json`: exact environment, architecture, seed and requested training steps.
 - `summary.json`: selected model, zero-force baseline, validation and separate holdout results.
@@ -61,6 +63,14 @@ Actual token usage and estimated cost appear in `api_*.json`; conservative reser
 - `holdout_trajectory.csv`: one held-out controlled trajectory with states and applied forces.
 
 "Best" does not mean successful or even better than zero force. Always inspect the baseline and success rate. A 12-second success rate of zero means balancing has not been solved.
+
+To organize an older run without retraining:
+
+```sh
+python -m cart_pendulum.archives runs/double-001
+```
+
+You can evaluate an architecture's saved winner by passing its folder to the existing evaluator, for example `python -m cart_pendulum.evaluate runs/double-001/architectures/mlp-tanh-64x64 --output runs/retest-64x64`.
 
 ## Reload and test, without training
 
