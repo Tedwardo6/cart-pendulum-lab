@@ -42,6 +42,43 @@ Success requires the final two seconds of the 12-second episode to remain contin
 
 Swing-up has its own versioned experiment evidence, separate from near-upright balance results. Existing balance memories and models remain readable. Each new swing-up candidate trains from fresh weights. The API is told the new goal and selection rules. This task may require much more training and exploration than the small initial runs; trying one rod first is useful for diagnosing the learning setup.
 
+## Continue training an existing controller
+
+Use this when you want to give a promising controller more experience instead of starting a fresh network:
+
+```sh
+python -m cart_pendulum.continue_training runs/double-001 \
+  --blocks 4 --steps 65536 --max-minutes 60 \
+  --output "runs/double-continued-$(date +%Y%m%d-%H%M%S)"
+```
+
+Replace `runs/double-001` with an existing experiment folder. This command reads its task, physical settings, architecture and training settings automatically. It makes **no API calls** and needs no API key. The source folder is preserved.
+
+By default it loads `best_model.zip`, including both actor and critic weights, the Adam optimizer state and cumulative step/update counters. Each block collects fresh experience and continues learning from the latest weights. The simulator starts new episodes with a recorded block seed; this is not a bit-for-bit continuation of the old random stream, unfinished episode or rollout buffer. The architecture and learning settings stay fixed.
+
+`--steps 65536` means **additional steps per block**, not a lifetime total. Four completed blocks add 262,144 steps to the checkpoint's prior experience. Progress prints every 8,192 new steps. The cooperative time limit can stop training early, and evaluation can finish after the deadline. Ctrl-C saves current weights; a `STOP` file in the output folder requests a cooperative stop.
+
+The parent's best checkpoint is evaluated first on the same validation seeds used for all blocks and is kept as the incumbent. After each block, the new checkpoint is evaluated, archived and entered into experiment memory. Selection uses the existing task rules. If later training makes performance worse, it does not replace the best checkpoint, but training still continues from the latest weights within this run.
+
+The new folder contains:
+
+- `best_model.zip` / `best_config.json`: highest-ranked evaluated checkpoint, possibly the original one.
+- `latest_model.zip` / `latest_config.json`: most recent saved training state, including interrupted work when saving succeeds.
+- `trial_000/`: imported and reevaluated parent best; no new training.
+- `trial_001/`, etc.: successive training blocks, each with model, settings, training counters and evaluation when completed.
+- `history.json` and `summary.json`: initial performance, learning progress, selected checkpoint and final held-out evaluation.
+- `starting_model.zip`, `starting_config.json`, `parent.json`: starting checkpoint snapshot and source identity.
+
+In each block's `training.json`, `actual_steps` is cumulative, `initial_steps` is the inherited count and `added_steps` is newly collected experience. `added_gradient_updates` reports new PPO training epochs; partial rollouts stopped before an update may add steps without updating weights. Persistent memory includes this distinction so API proposals can distinguish continued checkpoints from independent fresh trials. The imported baseline is not duplicated into shared memory as a new training experiment.
+
+To continue again, use the new folder as the source. The default begins from its best checkpoint; add `--checkpoint latest` to build on its latest saved state instead. The parent's best is still retained as a candidate. Always choose a new output folder.
+
+The same GIF command works on continuation runs:
+
+```sh
+python -m cart_pendulum.render_best runs/double-continued-EXAMPLE
+```
+
 ## OpenAI-guided configuration search
 
 ```sh
@@ -68,7 +105,7 @@ The API receives a bounded selection of up to eight best/recent completed result
 
 The shared file is a storage container, not a shared prompt across tasks. Filtering separates `balance` from `swingup`, rod count, masses, length, force limit, timing, track boundaries, initial-angle range and success thresholds. Architectures and learning hyperparameters intentionally remain comparable within the same task/environment; separating those would prevent the API from learning which architectures perform better. Training budgets and seeds are supplied as context rather than used to exclude records. Reward/dynamics changes require a new task version before reusing evidence.
 
-This is persistent experiment context, not a change to the OpenAI model's weights. Each candidate still trains from fresh weights. Held-out test results are saved in the run folder but excluded from proposal memory to keep them separate from architecture selection.
+This is persistent experiment context, not a change to the OpenAI model's weights. Configuration-search candidates train from fresh weights; the separate continuation command explicitly restores an existing controller. Held-out test results are saved in the run folder but excluded from proposal memory to keep them separate from architecture selection.
 
 Use `--memory-file /absolute/path/to/experiment_memory.json` if launching from another working directory or sharing history between checkouts. Back up both the memory file and the run folders: the memory is an index of evidence, not a replacement for model files. Import completed experiments created before this feature with:
 

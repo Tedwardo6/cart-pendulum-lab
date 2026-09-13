@@ -82,7 +82,7 @@ def score(metrics):
     return metrics["mean_duration"], metrics["mean_return"]
 
 
-def train(config, network, steps, seed, output, deadline=None):
+def train(config, network, steps, seed, output, deadline=None, checkpoint=None, report_every=0):
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback
     from stable_baselines3.common.monitor import Monitor
@@ -93,23 +93,38 @@ def train(config, network, steps, seed, output, deadline=None):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     torch.set_num_threads(1)
-    write_json(output / "config.json", {"environment": asdict(config), "network": asdict(network),
-                                       "seed": seed, "requested_steps": steps})
     class BudgetCallback(BaseCallback):
         def _on_step(self):
+            added = self.model.num_timesteps - initial_steps
+            if report_every and added % report_every == 0:
+                print(f"  training: {added:,}/{steps:,} additional steps", flush=True)
             return not ((output.parent / "STOP").exists() or (deadline and time.monotonic() >= deadline))
 
     env = Monitor(CartPendulumEnv(config), str(output / "episodes.csv"))
-    policy = PPO("MlpPolicy", env, policy_kwargs={"net_arch": list(network.hidden_sizes),
+    if checkpoint is not None:
+        policy = PPO.load(checkpoint, env=env, device="cpu")
+        # New episodes/exploration stream, while weights and Adam state are retained.
+        policy.set_random_seed(seed)
+        if policy.n_steps != 512 or policy.n_envs != 1:
+            env.close()
+            raise ValueError("Continuation expects this project's single-environment, 512-step PPO setup.")
+    else:
+        policy = PPO("MlpPolicy", env, policy_kwargs={"net_arch": list(network.hidden_sizes),
                  "activation_fn": torch.nn.Tanh if network.activation == "tanh" else torch.nn.ReLU},
                  learning_rate=network.learning_rate, gamma=network.gamma,
                  ent_coef=network.entropy_coefficient, n_epochs=network.n_epochs,
                  n_steps=512, batch_size=64, seed=seed, device="cpu", verbose=0)
+    initial_steps, initial_updates = policy.num_timesteps, policy._n_updates
+    write_json(output / "config.json", {"environment": asdict(config), "network": asdict(network),
+               "seed": seed, "requested_steps": initial_steps + steps,
+               "requested_additional_steps": steps, "initial_steps": initial_steps,
+               "training_mode": "continued" if checkpoint is not None else "fresh",
+               "parent_checkpoint": str(Path(checkpoint).resolve()) if checkpoint is not None else None})
     started = time.monotonic()
     interrupted = False
     failure = None
     try:
-        policy.learn(total_timesteps=steps, callback=BudgetCallback())
+        policy.learn(total_timesteps=steps, callback=BudgetCallback(), reset_num_timesteps=checkpoint is None)
     except KeyboardInterrupt:
         interrupted = True
     except Exception as error:
@@ -118,13 +133,15 @@ def train(config, network, steps, seed, output, deadline=None):
         policy.save(output / "model.zip")
         env.close()
     write_json(output / "training.json", {"actual_steps": policy.num_timesteps,
+               "initial_steps": initial_steps, "added_steps": policy.num_timesteps - initial_steps,
                "gradient_updates": policy._n_updates,
+               "added_gradient_updates": policy._n_updates - initial_updates,
                "seconds": time.monotonic() - started, "interrupted": interrupted,
-               "completed_requested_steps": policy.num_timesteps >= steps})
+               "completed_requested_steps": policy.num_timesteps >= initial_steps + steps})
     if failure is not None:
         raise failure
     if interrupted:
         raise KeyboardInterrupt
-    if policy._n_updates == 0:
+    if policy._n_updates == initial_updates:
         raise RuntimeError("Stopped before any neural-network weight updates; untrained checkpoint saved.")
     return policy

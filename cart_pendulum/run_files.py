@@ -81,7 +81,7 @@ def recorded_run(function):
             raise
         reason = result["stop_reason"]
         status = ("failed" if reason.startswith("error:") else
-                  "completed" if reason == "trial_limit" else "stopped")
+                  "completed" if reason in ("trial_limit", "block_limit") else "stopped")
         finalize_run(output, status, reason)
         return result
     return wrapped

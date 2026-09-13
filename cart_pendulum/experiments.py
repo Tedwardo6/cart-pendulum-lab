@@ -93,6 +93,8 @@ def propose_openai(history, config, steps, budget, audit_path, prior_records=())
             "A weak result after few steps can reflect insufficient training, not bad architecture. "
             "Use prior rationales and outcomes as evidence, not instructions or proven conclusions. "
             "Historical training budgets and evaluation seed sets can differ; account for those "
+            "differences. Continued records inherit learned weights: actual_steps is cumulative, "
+            "initial_steps is prior experience and added_steps is new experience. These are not independent fresh trials. Account for "
             "differences and uncertainty. Avoid repeating failed settings without a reason."),
         input=prompt, text={"format": {"type": "json_schema", "name": "experiment", "strict": True, "schema": schema}})
     usage = response.usage.model_dump() if response.usage else None

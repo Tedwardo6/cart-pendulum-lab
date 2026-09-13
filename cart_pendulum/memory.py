@@ -42,6 +42,10 @@ class ExperimentMemory:
                  "network": config["network"], "rationale": record.get("rationale", ""),
                  "training_seed": config["seed"], "requested_steps": config["requested_steps"],
                  "actual_steps": training["actual_steps"],
+                 "training_mode": config.get("training_mode", "fresh"),
+                 "initial_steps": training.get("initial_steps", 0),
+                 "added_steps": training.get("added_steps", training["actual_steps"]),
+                 "parent_checkpoint": config.get("parent_checkpoint"),
                  "validation_seeds": [e["seed"] for e in metrics["episodes"]],
                  "validation": {k: metrics[k] for k in ("task", "mean_duration", "mean_return", "success_rate",
                                                        "mean_upright_time", "mean_final_hold") if k in metrics},
@@ -82,7 +86,7 @@ def proposal_evidence(records, limit=8):
     for record in candidates:
         # Exclude local filesystem paths; include conditions needed to interpret scores.
         compact = {k: record.get(k) for k in ("id", "network", "training_seed", "requested_steps",
-                   "actual_steps", "validation_seeds", "validation")}
+                   "actual_steps", "training_mode", "initial_steps", "added_steps", "validation_seeds", "validation")}
         compact["rationale"] = record.get("rationale", "")[:600]
         if compact not in selected:
             selected.append(compact)
