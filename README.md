@@ -4,7 +4,7 @@ A Python learning project: derive the physics of a cart carrying a chain of pend
 
 ## Current lesson
 
-Lesson 1 implements physical parameters and the planar mass matrix for any positive number of uniform rods, including double, triple, and quadruple pendulums. It does **not yet integrate motion or implement a controller**.
+The planar model now computes accelerations, integrates free motion, and renders animations. It supports any positive number of uniform rods; the examples and checks cover one through four. A controller is not implemented yet.
 
 From the repository root, with Python 3.9 or newer:
 
@@ -15,6 +15,15 @@ python -m pip install -e .
 python -m examples.lesson_01_mass_matrix
 python -m unittest discover -s tests -v
 ```
+
+To render a 12-second free-motion demonstration with playback controls:
+
+```sh
+python -m pip install -e '.[render]'
+python -m examples.render_simulation --links 2 --output runs/double
+```
+
+Open `runs/double/simulation.html` for play/pause and frame controls, or `simulation.gif` for a looping preview. Use `--links 3` or `--links 4` for additional rods. The cart moves in reaction to the swinging rods even with zero motor force. Physics uses 2 ms RK4 steps; animation samples at 25 frames per second. RK4 is approximate: check convergence and energy drift when changing parameters or increasing speeds.
 
 Read [the first lesson](docs/lesson_01.md), then [the implementation](cart_pendulum/planar.py).
 
@@ -30,8 +39,8 @@ Read [the first lesson](docs/lesson_01.md), then [the implementation](cart_pendu
 ## Roadmap
 
 1. Parameters and mass matrix (implemented and checked against rigid-body kinetic energy).
-2. Force and gravity terms, accelerations, and the state derivative.
-3. Numerical integration, energy checks, and animation.
+2. Force and gravity terms, accelerations, and the state derivative (implemented).
+3. Numerical integration, energy checks, and animation (implemented).
 4. Control environment, constraints, and baseline controllers.
 5. Automated controller code generation, fixed evaluations, and logged iterations with explicit run and cost limits.
 6. Explore a spatial model after deciding joint types, rod inertia, and cart actuation.
@@ -42,4 +51,4 @@ The planar model lives in its own module. Future integration and controller inte
 
 ## Validation
 
-Tests cover the analytic single-rod matrix and compare matrix-based energy with independently computed center-of-mass and rotational energy for 80 sampled configurations across one to four rods. These checks validate this lesson's mass matrix, not a complete simulator.
+Tests compare the mass matrix with independently computed rigid-body energy and verify analytic single-rod acceleration, equilibrium, instantaneous motor power, and conservation of energy and horizontal momentum during short free-motion trajectories for one through four rods. These checks do not establish accuracy for every parameter choice or long chaotic trajectory.

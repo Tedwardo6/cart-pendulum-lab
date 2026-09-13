@@ -2,7 +2,7 @@
 
 Angles are absolute, measured from downward; positive tilts right.
 Coordinates: q = [x, theta_1, ..., theta_n]. Units: kg, m, s, radians.
-This lesson implements parameters and the mass matrix, not time evolution.
+Dynamics return a state derivative; integration and rendering live separately.
 """
 
 from dataclasses import dataclass
@@ -67,3 +67,54 @@ class PlanarChain:
                 matrix[j + 1, i + 1] = coupling
 
         return matrix
+
+    def _split_state(self, state):
+        state = np.asarray(state, dtype=float)
+        size = self.n_links + 1
+        if state.shape != (2 * size,) or not np.all(np.isfinite(state)):
+            raise ValueError(f"State must contain {2 * size} finite positions and velocities.")
+        return state[:size], state[size:]
+
+    def derivative(self, state, force=0.0):
+        """Return [q_dot, q_ddot] for the current state and horizontal force."""
+        q, velocity = self._split_state(state)
+        if not np.isfinite(force):
+            raise ValueError("Force must be finite.")
+        angles, omega = q[1:], velocity[1:]
+        lengths, masses = np.asarray(self.lengths), np.asarray(self.masses)
+        downstream = np.array([masses[i + 1:].sum() for i in range(self.n_links)])
+        a = lengths * (masses / 2 + downstream)
+
+        rhs = np.zeros(self.n_links + 1)
+        rhs[0] = force + np.sum(a * np.sin(angles) * omega**2)
+        rhs[1:] = -self.gravity * a * np.sin(angles)
+        for i in range(self.n_links):
+            for j in range(i + 1, self.n_links):
+                coupling = lengths[i] * a[j]
+                sine = np.sin(angles[i] - angles[j])
+                rhs[i + 1] -= coupling * sine * omega[j]**2
+                rhs[j + 1] += coupling * sine * omega[i]**2
+
+        acceleration = np.linalg.solve(self.mass_matrix(angles), rhs)
+        return np.concatenate((velocity, acceleration))
+
+    def joint_positions(self, q):
+        """Return cart pivot and rod endpoints as an (n + 1, 2) array."""
+        q = np.asarray(q, dtype=float)
+        if q.shape != (self.n_links + 1,) or not np.all(np.isfinite(q)):
+            raise ValueError("Provide cart position followed by one angle per rod.")
+        lengths = np.asarray(self.lengths)
+        offsets = np.column_stack((lengths * np.sin(q[1:]), -lengths * np.cos(q[1:])))
+        points = np.zeros((self.n_links + 1, 2))
+        points[0] = (q[0], 0.0)
+        points[1:] = points[0] + np.cumsum(offsets, axis=0)
+        return points
+
+    def energy(self, state):
+        """Total kinetic plus gravitational potential energy, in joules."""
+        q, velocity = self._split_state(state)
+        points = self.joint_positions(q)
+        center_heights = (points[:-1, 1] + points[1:, 1]) / 2
+        kinetic = 0.5 * velocity @ self.mass_matrix(q[1:]) @ velocity
+        potential = self.gravity * np.dot(self.masses, center_heights)
+        return float(kinetic + potential)
