@@ -4,7 +4,9 @@ A Python learning project: derive the physics of a cart carrying a chain of pend
 
 ## Current lesson
 
-The planar model now computes accelerations, integrates free motion, and renders animations. It supports any positive number of uniform rods; the examples and checks cover one through four. A controller is not implemented yet.
+The planar model computes accelerations and integrates motion. A Gymnasium environment, PPO neural-controller trainer, fixed-seed evaluator and bounded architecture-search loop support two, three and four rods. Rendering is optional. Short development runs verify the pipeline; robust 12-second balancing is not yet demonstrated.
+
+Start with [the control lesson](docs/lesson_03_control.md) and [experiment instructions](docs/running_experiments.md). The OpenAI proposer is optional; local training requires no API key.
 
 From the repository root, with Python 3.9 or newer:
 
@@ -13,7 +15,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 python -m examples.lesson_01_mass_matrix
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -p 'test_mass_matrix.py' -v
+python -m unittest discover -s tests -p 'test_dynamics.py' -v
 ```
 
 To render a 12-second free-motion demonstration with playback controls:
@@ -41,8 +44,8 @@ Read [the first lesson](docs/lesson_01.md), then [the implementation](cart_pendu
 1. Parameters and mass matrix (implemented and checked against rigid-body kinetic energy).
 2. Force and gravity terms, accelerations, and the state derivative (implemented).
 3. Numerical integration, energy checks, and animation (implemented).
-4. Control environment, constraints, and baseline controllers.
-5. Automated controller code generation, fixed evaluations, and logged iterations with explicit run and cost limits.
+4. Control environment, constraints and PPO training (implemented; performance tuning remains).
+5. Automated architecture/configuration proposals, fixed evaluations and logged iterations with run and cost limits (implemented; live API access needs a key). Arbitrary generated Python execution is not implemented.
 6. Explore a spatial model after deciding joint types, rod inertia, and cart actuation.
 
 ## Future 3D work
