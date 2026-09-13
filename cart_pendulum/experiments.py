@@ -70,14 +70,24 @@ def propose_openai(history, config, steps, budget, audit_path, prior_records=())
     write_json(Path(audit_path).with_name(Path(audit_path).stem + "_context.json"), context)
     budget.reserve()
     client = OpenAI(max_retries=0, timeout=90)
+    task_instructions = (
+        "Task: swing all rods from hanging downward to upright using only cart force. "
+        "Reward favors mean uprightness, centering, moderate angular speed and control, "
+        "with a bonus when all rods are upright and slow. Angles can rotate freely. "
+        "Success requires staying inside the track and settling all rods within angle_limit, "
+        "settle_angular_speed and settle_cart_speed for the final hold_seconds of the episode. "
+        "Rank validation success_rate first, mean_final_hold second, mean_return third. "
+        "Long episode duration alone is not progress: hanging motionless also lasts the horizon. "
+        if config.task == "swingup" else
+        "Task: near-upright balancing. Improve validation survival duration first, return second. ")
     response = client.responses.create(
         model="gpt-5-mini", store=False, service_tier="default", max_output_tokens=4096,
         reasoning={"effort": "minimal"},
-        instructions=("Design the next MLP PPO experiment for near-upright cart-pendulum balancing. "
+        instructions=(task_instructions + "Design the next MLP PPO cart-pendulum experiment. "
             "Only propose configuration, never code. Use 1–3 hidden layers of 16–256 neurons, "
             "activation tanh or relu, learning_rate 0.00001–0.003, gamma 0.9–0.9999, "
             "entropy_coefficient 0–0.03, n_epochs 1–20. Explain the change in a short rationale. "
-            "Improve validation survival duration first, return second. Dynamics, observations, "
+            "Dynamics, observations, "
             "reward, seed sets and training budget are fixed. Policy is a Gaussian PPO actor "
             "with actions clipped to [-1,1], not a tanh-squashed Gaussian. "
             "A weak result after few steps can reflect insufficient training, not bad architecture. "
@@ -188,6 +198,8 @@ def run_experiments(output, config, *, trials=3, steps=32768, seed=7,
                 shutil.copyfile(trial / "config.json", output / "best_config.json")
             write_json(output / "history.json", history)
             print(f"  validation: {metrics['mean_duration']:.3f}s; success {metrics['success_rate']:.0%}", flush=True)
+            if config.task == "swingup":
+                print(f"  mean final settled hold: {metrics['mean_final_hold']:.3f}s; return {metrics['mean_return']:.2f}", flush=True)
         except KeyboardInterrupt:
             stop_reason = "keyboard_interrupt"
             break
@@ -213,7 +225,8 @@ def run_experiments(output, config, *, trials=3, steps=32768, seed=7,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--links", type=int, choices=[2, 3, 4], default=2)
+    parser.add_argument("--links", type=int, choices=[1, 2, 3, 4], default=2)
+    parser.add_argument("--task", choices=["balance", "swingup"], default="balance")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--steps", type=int, default=32768)
@@ -231,7 +244,7 @@ def main():
             parser.error("--ask-api-key requires --proposer openai.")
         import getpass
         os.environ["OPENAI_API_KEY"] = getpass.getpass("OpenAI API key (hidden; not saved): ")
-    summary = run_experiments(args.output, EnvConfig(n_links=args.links), trials=args.trials,
+    summary = run_experiments(args.output, EnvConfig(n_links=args.links, task=args.task), trials=args.trials,
         steps=args.steps, seed=args.seed, proposer=args.proposer, max_minutes=args.max_minutes,
         api_budget=args.api_budget, budget_ledger=args.budget_ledger, validation_episodes=args.evaluation_episodes,
         memory_file=args.memory_file)

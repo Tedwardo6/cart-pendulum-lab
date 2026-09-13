@@ -60,19 +60,25 @@ def evaluate(policy, config, seeds, trajectory=None):
                 break
         results.append({"seed": int(seed), "duration": elapsed, "return": total_reward,
                         "success": info["success"], "end_reason": info["end_reason"],
+                        "upright_time": info["upright_time"], "final_hold": info["final_hold"],
                         "max_angle_error": max_angle, "rms_force": float(np.sqrt(force_squared / max(elapsed, 1e-9)))})
         if trajectory is not None and index == 0:
             header = ["time", "x", *[f"theta_{i+1}" for i in range(config.n_links)],
                       "x_dot", *[f"omega_{i+1}" for i in range(config.n_links)], "force"]
             np.savetxt(trajectory, history, delimiter=",", header=",".join(header), comments="")
     env.close()
-    return {"mean_duration": float(np.mean([r["duration"] for r in results])),
+    return {"task": config.task,
+            "mean_upright_time": float(np.mean([r["upright_time"] for r in results])),
+            "mean_final_hold": float(np.mean([r["final_hold"] for r in results])),
+            "mean_duration": float(np.mean([r["duration"] for r in results])),
             "success_rate": float(np.mean([r["success"] for r in results])),
             "mean_return": float(np.mean([r["return"] for r in results])), "episodes": results}
 
 
 def score(metrics):
-    """Rank survival first; return breaks ties. Never compare different tasks."""
+    """Task-specific selection. Hanging for the full episode is not swing-up success."""
+    if metrics.get("task") == "swingup":
+        return metrics["success_rate"], metrics["mean_final_hold"], metrics["mean_return"]
     return metrics["mean_duration"], metrics["mean_return"]
 
 

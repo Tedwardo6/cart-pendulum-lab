@@ -22,22 +22,32 @@ class EnvConfig:
     track_limit: float = 2.4
     angle_limit: float = 0.35
     initial_angle_range: float = 0.03
+    task: str = "balance"
+    hold_seconds: float = 2.0
+    settle_angular_speed: float = 1.0
+    settle_cart_speed: float = 1.0
 
     def __post_init__(self):
         if type(self.n_links) is not int or not 1 <= self.n_links <= 4:
             raise ValueError("n_links must be 1, 2, 3, or 4.")
+        if self.task not in ("balance", "swingup"):
+            raise ValueError("task must be balance or swingup.")
         for key, value in vars(self).items():
+            if key == "task":
+                continue
             if not np.isfinite(value) or value <= 0:
                 raise ValueError(f"{key} must be finite and positive.")
         if self.initial_angle_range >= self.angle_limit:
             raise ValueError("Initial angles must be inside the balancing limit.")
+        if self.task == "swingup" and self.hold_seconds > self.duration:
+            raise ValueError("The swing-up hold time cannot exceed episode duration.")
         for ratio in (self.control_dt / self.physics_dt, self.duration / self.control_dt):
             if ratio < 1 or not np.isclose(ratio, round(ratio)):
                 raise ValueError("Timing intervals must divide evenly.")
 
 
 class CartPendulumEnv(gym.Env):
-    """Near-upright balancing task. No drawing and no future-state observations.
+    """Balancing or hanging-start swing-up. No drawing or future observations.
 
     Action: shape (1,), bounded [-1, 1], scaled into newtons.
     Observation: [x/track_limit, x_dot/5, sin(theta), cos(theta), omega/10, ...].
@@ -73,9 +83,12 @@ class CartPendulumEnv(gym.Env):
         c = self.config
         self.state = np.zeros(2*(c.n_links + 1))
         self.state[0] = self.np_random.uniform(-0.02, 0.02)
-        self.state[1:c.n_links + 1] = np.pi + self.np_random.uniform(
+        target = np.pi if c.task == "balance" else 0.0
+        self.state[1:c.n_links + 1] = target + self.np_random.uniform(
             -c.initial_angle_range, c.initial_angle_range, c.n_links)
         self.time = 0.0
+        self.upright_time = 0.0
+        self.final_hold = 0.0
         self._done = False
         return self.observation(), {"time": self.time}
 
@@ -105,7 +118,14 @@ class CartPendulumEnv(gym.Env):
             if abs(self.state[0]) > c.track_limit:
                 reason = "track_limit"
                 break
-            if np.max(np.abs(self.angle_errors())) > c.angle_limit:
+            if c.task == "swingup":
+                v = self.state[c.n_links + 1:]
+                settled = (np.max(np.abs(self.angle_errors())) <= c.angle_limit
+                           and np.max(np.abs(v[1:])) <= c.settle_angular_speed
+                           and abs(v[0]) <= c.settle_cart_speed)
+                self.final_hold = self.final_hold + c.physics_dt if settled else 0.0
+                self.upright_time += c.physics_dt if settled else 0.0
+            if c.task == "balance" and np.max(np.abs(self.angle_errors())) > c.angle_limit:
                 reason = "angle_limit"
                 break
         terminated = reason is not None
@@ -118,7 +138,16 @@ class CartPendulumEnv(gym.Env):
                 + .01 * (velocity[0] / 5)**2 + .01 * np.mean((velocity[1:] / 10)**2)
                 + .005 * normalized**2)
         reward = float((1 - cost) * elapsed / c.control_dt - float(terminated))
+        if c.task == "swingup":
+            # 0 hanging, 1 upright; smooth feedback before the first successful swing.
+            height = float(np.mean((1 - np.cos(self.state[1:c.n_links + 1])) / 2))
+            centered = 1 - .25 * min(1., (self.state[0] / c.track_limit)**2)
+            slow = .5 + .5 / (1 + np.mean((velocity[1:] / 5)**2))
+            reward = float((height * centered * slow * (1 - .05 * normalized**2)
+                            + .5 * float(self.final_hold > 0)) * elapsed / c.control_dt
+                           - 5 * float(terminated))
         info = {"time": self.time, "force": force, "end_reason": reason or ("time_limit" if truncated else None),
                 "max_angle_error": float(np.max(np.abs(angles))), "cart_position": float(self.state[0]),
-                "success": bool(truncated)}
+                "success": bool(truncated and (c.task == "balance" or self.final_hold >= c.hold_seconds - 1e-9)),
+                "upright_time": self.upright_time, "final_hold": self.final_hold}
         return self.observation(), reward, terminated, truncated, info

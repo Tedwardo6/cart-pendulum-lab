@@ -24,6 +24,24 @@ Use `--links 3` or `--links 4` and a new output directory for the other tasks. E
 
 For a fast end-to-end check, use `--trials 2 --steps 512 --evaluation-episodes 2`.
 
+## Start hanging down and learn to swing up
+
+Add `--task swingup` to start every rod near downward (angle zero). The default `--task balance` still starts near upright (angle pi). Both tasks use the same cart force, physical model and observations. One through four rods are supported with `--links`.
+
+```sh
+python -m cart_pendulum.experiments --links 2 --task swingup --proposer openai \
+  --ask-api-key --api-budget 20 --trials 2 --steps 32768 --max-minutes 30 \
+  --output "runs/double-swingup-$(date +%Y%m%d-%H%M%S)"
+```
+
+Swing-up permits full rod rotations; exceeding the upright angle limit no longer ends an episode. Leaving the cart track or encountering numerical failure still does. The rods are ideal links with no collisions against the cart, floor or each other.
+
+The smooth reward uses mean uprightness `mean((1 - cos(theta))/2)`, which is zero hanging down and one with all rods upright. It is multiplied by factors favoring cart centering, moderate angular speed and smaller force. A bonus of 0.5 applies when all rods are within 0.35 radians (about 20 degrees) of upright, all angular speeds are at most 1 rad/s, and cart speed is at most 1 m/s. Termination carries a penalty of 5. These are initial reward-design choices, not guarantees of learning.
+
+Success requires the final two seconds of the 12-second episode to remain continuously within those angle and speed bounds, without leaving the track. Hold time is checked at every physics substep and resets when any bound is exceeded. Briefly passing through upright does not count. Selection ranks success rate first, mean final settled hold second, and mean return third. A full-length episode hanging at the bottom is not success; inspect these metrics rather than duration alone.
+
+Swing-up has its own versioned experiment evidence, separate from near-upright balance results. Existing balance memories and models remain readable. Each new swing-up candidate trains from fresh weights. The API is told the new goal and selection rules. This task may require much more training and exploration than the small initial runs; trying one rod first is useful for diagnosing the learning setup.
+
 ## OpenAI-guided configuration search
 
 ```sh

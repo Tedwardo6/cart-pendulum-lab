@@ -38,7 +38,9 @@ def retain_architecture(run, record):
               "network": config["network"], "training_seed": config["seed"],
               "validation": metrics, "comparison": comparison,
               "rationale": record.get("rationale", ""),
-              "selection_rule": "Mean validation survival first, mean return second; ties keep the incumbent."}
+              "selection_rule": ("Validation success rate, final settled hold, then return; ties keep the incumbent."
+                                 if metrics.get("task") == "swingup" else
+                                 "Mean validation survival first, mean return second; ties keep the incumbent.")}
     improved = best is None or score(metrics) > score(best["validation"])
     if improved:
         # Each copied file is replaced only after the new copy is complete.
@@ -66,6 +68,8 @@ def retain_architecture(run, record):
                            "activation": network.activation, "tested_trials": len(history),
                            "mean_duration": best["validation"]["mean_duration"],
                            "mean_return": best["validation"]["mean_return"],
+                           "success_rate": best["validation"].get("success_rate"),
+                           "mean_final_hold": best["validation"].get("mean_final_hold"),
                            "model": f"{architecture}/best_model.zip"}
     write_json(index_path, index)
     return destination

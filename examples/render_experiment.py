@@ -28,7 +28,7 @@ def main():
         parser.error("The run has no completed trials.")
     args.output.mkdir(parents=True, exist_ok=False)
     panels = []
-    fig, axes = plt.subplots(1, len(records), figsize=(6 * len(records), 5), squeeze=False)
+    fig, axes = plt.subplots(1, len(records), figsize=(max(8, 6 * len(records)), 5), squeeze=False)
     fig.patch.set_facecolor("#101927")
     colors = ["#56d8d0", "#ffb568", "#b79bff", "#ff829e"]
     for ax, record in zip(axes[0], records):
@@ -44,7 +44,8 @@ def main():
         ax.set_aspect("equal")
         extent = max(config["track_limit"] + .4, float(np.abs(points[:, :, 0]).max()) + .4)
         ax.set_xlim(-extent, extent)
-        ax.set_ylim(-.65, config["total_length"] + .55)
+        ax.set_ylim(-config["total_length"] - .55 if config.get("task") == "swingup" else -.65,
+                    config["total_length"] + .55)
         ax.axhline(-.16, color="#8795a7")
         ax.axvline(-config["track_limit"], color="#ff829e", ls=":", alpha=.5)
         ax.axvline(config["track_limit"], color="#ff829e", ls=":", alpha=.5)
@@ -60,7 +61,7 @@ def main():
         label = ax.text(.03, .96, "", transform=ax.transAxes, va="top", color="white", fontsize=10)
         panels.append((data, points, episode, cart, rods, label))
     fig.suptitle("Saved controller evaluations · real-time playback", color="white", fontsize=16)
-    fig.text(.5, .025, "Each panel freezes when its episode ends. These are individual episodes, not average scores.",
+    fig.text(.5, .025, "Each panel freezes when its episode ends.\nThese are individual episodes, not average scores.",
              ha="center", color="#aab9cc", fontsize=10)
     fig.tight_layout(rect=(0, .06, 1, .92))
     fps = 25
@@ -76,8 +77,10 @@ def main():
             for i, rod in enumerate(rods):
                 rod.set_data(p[i:i+2, 0], p[i:i+2, 1])
             ended = t >= data[-1, 0]
-            status = episode["end_reason"].replace("_", " ") if ended else "balancing"
-            label.set_text(f"t = {data[index, 0]:.2f} s  |  {status}\nLast applied force: {data[index, -1]:+.1f} N")
+            status = episode["end_reason"].replace("_", " ") if ended else "controlling"
+            if ended:
+                status += " / success" if episode["success"] else " / unsuccessful"
+            label.set_text(f"t = {data[index, 0]:.2f} s\n{status}\nLast applied force: {data[index, -1]:+.1f} N")
 
     frames = np.arange(0, end + 1.04, 1 / fps)
     animation = FuncAnimation(fig, draw, frames=frames, interval=1000 / fps)

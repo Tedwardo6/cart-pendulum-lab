@@ -7,10 +7,15 @@ import json
 from pathlib import Path
 
 from .learning import write_json, score
+from .environment import EnvConfig
 
 # Increment when observations, rewards, dynamics or evaluation semantics change.
 TASK_VERSION = "planar-balance-v1"
 DEFAULT_MEMORY = Path("runs/experiment_memory.json")
+
+
+def task_version(config):
+    return TASK_VERSION if config.task == "balance" else "planar-swingup-v1"
 
 
 class ExperimentMemory:
@@ -23,8 +28,8 @@ class ExperimentMemory:
         data = json.loads(self.path.read_text())
         if data.get("version") != 1:
             raise ValueError("Unsupported experiment memory version.")
-        return [r for r in data["records"] if r["task_version"] == TASK_VERSION
-                and r["environment"] == asdict(config)]
+        return [r for r in data["records"] if r["task_version"] == task_version(config)
+                and asdict(EnvConfig(**r["environment"])) == asdict(config)]
 
     def remember(self, run, record):
         run = Path(run)
@@ -33,18 +38,19 @@ class ExperimentMemory:
         training = json.loads((trial / "training.json").read_text())
         metrics = json.loads((trial / "validation.json").read_text())
         identity = hashlib.sha256(str(trial.resolve()).encode()).hexdigest()
-        entry = {"id": identity, "status": "completed", "task_version": TASK_VERSION, "environment": config["environment"],
+        entry = {"id": identity, "status": "completed", "task_version": task_version(EnvConfig(**config["environment"])), "environment": config["environment"],
                  "network": config["network"], "rationale": record.get("rationale", ""),
                  "training_seed": config["seed"], "requested_steps": config["requested_steps"],
                  "actual_steps": training["actual_steps"],
                  "validation_seeds": [e["seed"] for e in metrics["episodes"]],
-                 "validation": {k: metrics[k] for k in ("mean_duration", "mean_return", "success_rate")},
+                 "validation": {k: metrics[k] for k in ("task", "mean_duration", "mean_return", "success_rate",
+                                                       "mean_upright_time", "mean_final_hold") if k in metrics},
                  "source_run": str(run.resolve()), "source_trial": record["trial"]}
         self._save(entry)
 
     def remember_failure(self, run, trial, config, phase, error_type, network=None, rationale=""):
         identity = hashlib.sha256(str((Path(run) / trial).resolve()).encode()).hexdigest()
-        self._save({"id": identity, "status": "failed", "task_version": TASK_VERSION,
+        self._save({"id": identity, "status": "failed", "task_version": task_version(config),
             "environment": asdict(config), "source_run": str(Path(run).resolve()), "source_trial": trial,
             "phase": phase, "error_type": error_type, "network": asdict(network) if network else None,
             "rationale": rationale})
