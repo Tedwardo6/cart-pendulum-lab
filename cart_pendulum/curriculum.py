@@ -18,26 +18,40 @@ from .experiments import ApiBudget
 from .learning import NetworkConfig, evaluate, score, train, write_json
 from .memory import DEFAULT_MEMORY, ExperimentMemory
 from .run_files import initialize_run, recorded_run
-from .training_tasks import EVALUATION_VERSION, ResetConfig
+from .training_tasks import EVALUATION_VERSION, ResetConfig, RewardConfig, CURRICULUM_VERSION
 
 
 def probe(policy, config, stage, episodes):
     easy = evaluate(policy, config, range(30000, 30000 + episodes), evaluation_version=EVALUATION_VERSION,
-                    reset_config=ResetConfig(stage=0, easy_fraction=1, hanging_fraction=0))
+                    reset_config=ResetConfig(schedule=CURRICULUM_VERSION, stage=0, easy_fraction=1, hanging_fraction=0))
     frontier = evaluate(policy, config, range(40000, 40000 + episodes), evaluation_version=EVALUATION_VERSION,
-                        reset_config=ResetConfig(stage=stage, easy_fraction=0, hanging_fraction=0, frontier_only=True))
+                        reset_config=ResetConfig(schedule=CURRICULUM_VERSION, stage=stage, easy_fraction=0, hanging_fraction=0, frontier_only=True))
     return {"stage": stage, "retention_success": easy["success_rate"], "frontier_success": frontier["success_rate"],
             "easy": easy, "frontier": frontier}
 
 
 def compact_probes(probes):
-    return {key: probes[key] for key in ("stage", "retention_success", "frontier_success")}
+    return {**{key: probes[key] for key in ("stage", "retention_success", "frontier_success")},
+            "frontier_metrics": {k: v for k, v in probes.get("frontier", {}).items() if k != "episodes"}}
+
+
+def recovery_score(probes):
+    frontier = probes.get("frontier", {})
+    return (probes["frontier_success"], frontier.get("mean_final_hold", 0.),
+            frontier.get("mean_common_score", 0.))
+
+
+def improves_recovery(candidate, incumbent):
+    """Compare the same reset distribution; retain the incumbent on ties."""
+    if candidate["stage"] != incumbent["stage"]:
+        raise ValueError("Recovery comparisons require the same stage.")
+    return candidate["retention_success"] >= .75 and recovery_score(candidate) > recovery_score(incumbent)
 
 
 @recorded_run
 def run_curriculum(output, source, *, blocks=8, max_steps=65536, max_minutes=60,
                    seed=501, validation_episodes=8, proposer="local", api_budget=20,
-                   budget_ledger=".api-budget.json", memory_file=DEFAULT_MEMORY):
+                   budget_ledger=".api-budget.json", memory_file=DEFAULT_MEMORY, reward_mode="fixed"):
     from stable_baselines3 import PPO
     import torch
     if type(blocks) is not int or not 1 <= blocks <= 20:
@@ -46,6 +60,8 @@ def run_curriculum(output, source, *, blocks=8, max_steps=65536, max_minutes=60,
         raise ValueError("Maximum steps per block must be a positive multiple of 512.")
     if not np.isfinite(max_minutes) or max_minutes <= 0 or not 1 <= validation_episodes <= 32:
         raise ValueError("Use a positive time limit and 1–32 evaluation episodes.")
+    if reward_mode not in ("fixed", "adaptive"):
+        raise ValueError("Unknown reward mode.")
     if proposer not in ("local", "openai"):
         raise ValueError("Unknown proposer.")
     if proposer == "openai" and not os.getenv("OPENAI_API_KEY"):
@@ -61,10 +77,17 @@ def run_curriculum(output, source, *, blocks=8, max_steps=65536, max_minutes=60,
         raise ValueError("Source best and accepted checkpoints have incompatible physics.")
     network = NetworkConfig(**start["network"])
     previous_spec = start.get("training_spec")
-    stage = previous_spec["reset"]["stage"] if previous_spec else 0
+    is_current = (previous_spec or {}).get("curriculum_version") == CURRICULUM_VERSION
+    state_file = source / "curriculum_state.json"
+    source_state = json.loads(state_file.read_text()) if state_file.exists() else {}
+    is_current = is_current or source_state.get("curriculum_version") == CURRICULUM_VERSION
+    stage = source_state.get("stage", (previous_spec or {}).get("reset", {}).get("stage", 0)) if is_current else 0
+    fixed_reward = asdict(RewardConfig(**((previous_spec or {}).get("reward", {}))))
+    if (previous_spec or {}).get("curriculum_version") != CURRICULUM_VERSION:
+        fixed_reward.update(centering=max(.1, fixed_reward["centering"]), braking=.1)
     output.mkdir(parents=True, exist_ok=False)
     torch.set_num_threads(1)
-    settings = {"mode": "curriculum", "environment": asdict(config), "evaluation_version": EVALUATION_VERSION,
+    settings = {"mode": "curriculum", "curriculum_version": CURRICULUM_VERSION, "reward_mode": reward_mode, "initial_reward": fixed_reward, "environment": asdict(config), "evaluation_version": EVALUATION_VERSION,
                 "source_run": str(source.resolve()), "source_checkpoint": start_kind, "blocks": blocks,
                 "max_steps_per_block": max_steps, "max_minutes": max_minutes, "seed": seed,
                 "validation_episodes": validation_episodes, "proposer": proposer,
@@ -74,7 +97,7 @@ def run_curriculum(output, source, *, blocks=8, max_steps=65536, max_minutes=60,
     initialize_run(output, settings)
     deadline = time.monotonic() + max_minutes * 60
     memory = ExperimentMemory(memory_file)
-    write_json(output / "memory_at_start.json", {"records": memory.records(config, EVALUATION_VERSION)})
+    write_json(output / "memory_at_start.json", {"records": memory.records(config, EVALUATION_VERSION, CURRICULUM_VERSION)})
     parent = output / "starting_model.zip"
     shutil.copyfile(source / f"{start_kind}_model.zip", parent)
     write_json(output / "starting_config.json", start)
@@ -119,9 +142,20 @@ def run_curriculum(output, source, *, blocks=8, max_steps=65536, max_minutes=60,
         summary["best"] = best
         write_json(output / "summary.json", summary)
         write_json(output / "history.json", history)
-        write_json(output / "curriculum_state.json", {"stage": stage, "parent": str(parent.resolve()),
+        write_json(output / "curriculum_state.json", {"curriculum_version": CURRICULUM_VERSION, "stage": stage, "parent": str(parent.resolve()),
                    "probes": compact_probes(probes), "training_spec": previous_spec})
 
+    champions = {}
+
+    def protect(stage_id, checkpoint, checkpoint_config, stage_probes):
+        folder = output / "recovery" / f"stage_{stage_id:03}"
+        folder.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(checkpoint, folder / "model.zip")
+        write_json(folder / "config.json", checkpoint_config)
+        write_json(folder / "probes.json", stage_probes)
+        champions[stage_id] = (checkpoint, checkpoint_config, stage_probes)
+
+    protect(stage, parent, start, probes)
     persist()
     reason = "block_limit"
     for index in range(1, blocks + 1):
@@ -134,16 +168,35 @@ def run_curriculum(output, source, *, blocks=8, max_steps=65536, max_minutes=60,
             stages = allowed_stages(stage, probes["frontier_success"], probes["retention_success"])
             if proposer == "openai":
                 candidate, spec, steps, rationale = propose_openai(config, network, stage, stages, max_steps,
-                    memory.records(config, EVALUATION_VERSION), compact_probes(probes), budget, output / f"api_{index:03}.json")
+                    memory.records(config, EVALUATION_VERSION, CURRICULUM_VERSION), compact_probes(probes), budget, output / f"api_{index:03}.json",
+                    fixed_reward=fixed_reward if reward_mode == "fixed" else None)
             else:
                 candidate, spec, steps, rationale = propose_local(network, stage, stages, max_steps,
-                    previous_spec["reward"] if previous_spec else None)
+                    fixed_reward if reward_mode == "fixed" else (previous_spec["reward"] if previous_spec else fixed_reward))
             spec["transfer_origin"] = transfer_origin
+            spec["curriculum_version"] = CURRICULUM_VERSION
+            spec["ppo_target_kl"] = .01
             write_json(output / f"proposal_{index:03}.json", {"network": asdict(candidate), "training_spec": spec,
                        "steps": steps, "rationale": rationale, "allowed_stages": stages})
             if time.monotonic() >= deadline or (output / "STOP").exists():
                 reason = "time_limit_or_stop_file"
                 break
+            target_stage = spec["reset"]["stage"]
+            if target_stage != stage:
+                probes = probe(PPO.load(parent, device="cpu"), config, target_stage, validation_episodes)
+                stage = target_stage
+            incumbent = champions.get(stage)
+            parent_config = json.loads((output / "accepted_config.json").read_text())
+            if incumbent is None or improves_recovery(probes, incumbent[2]):
+                protect(stage, parent, parent_config, probes)
+            else:
+                parent, parent_config, probes = incumbent
+                previous_spec = parent_config.get("training_spec")
+                network = NetworkConfig(**parent_config["network"])
+            shutil.copyfile(parent, output / "accepted_model.zip")
+            write_json(output / "accepted_config.json", parent_config)
+            write_json(trial.with_name(f"baseline_{index:03}.json"), probes)
+            persist()
             reset_critic = previous_spec is None or previous_spec["reward"] != spec["reward"]
             phase = "training"
             print(f"Block {index}/{blocks}: stage {spec['reset']['stage']}; {steps:,} steps; critic reset={reset_critic}", flush=True)
@@ -157,11 +210,12 @@ def run_curriculum(output, source, *, blocks=8, max_steps=65536, max_minutes=60,
             phase = "validation"
             metrics = evaluate(policy, config, validation_seeds, trial / "validation_trajectory.csv", evaluation_version=EVALUATION_VERSION)
             candidate_probes = probe(policy, config, spec["reset"]["stage"], validation_episodes)
-            accepted = candidate_probes["retention_success"] >= .75
+            accepted = improves_recovery(candidate_probes, probes)
             write_json(trial / "validation.json", metrics)
             write_json(trial / "probes.json", candidate_probes)
             record = {"trial": trial.name, "network": asdict(candidate), "training_spec": spec, "rationale": rationale,
-                      "validation": metrics, "probes": compact_probes(candidate_probes), "accepted_for_training": accepted}
+                      "validation": metrics, "probes": compact_probes(candidate_probes), "accepted_for_training": accepted,
+                      "acceptance_reason": "improved_recovery" if accepted else ("lost_retention" if candidate_probes["retention_success"] < .75 else "no_recovery_improvement")}
             history.append(record)
             if score(metrics) > score(best["validation"]):
                 best = record
@@ -170,6 +224,7 @@ def run_curriculum(output, source, *, blocks=8, max_steps=65536, max_minutes=60,
                 parent, previous_spec, network = trial / "model.zip", spec, candidate
                 stage, probes = spec["reset"]["stage"], candidate_probes
                 copy_checkpoint(trial, output, "accepted")
+                protect(stage, parent, json.loads((trial / "config.json").read_text()), probes)
             summary["completed_blocks"] += 1
             summary["completed_trials"] += 1
             persist()
@@ -180,6 +235,11 @@ def run_curriculum(output, source, *, blocks=8, max_steps=65536, max_minutes=60,
                   f"common score: {metrics['mean_common_score']:.4f}", flush=True)
             print(f"  recovery: {candidate_probes['frontier_success']:.0%}; retention: {candidate_probes['retention_success']:.0%}; "
                   f"{'accepted' if accepted else 'rejected; previous training parent retained'}", flush=True)
+            diagnostics = candidate_probes.get("frontier", {}).get("cart_diagnostics", {})
+            if diagnostics:
+                print(f"  recovery cart exits: {diagnostics['track_exit_rate']:.0%}; "
+                      f"force saturated: {diagnostics['mean_force_saturation_fraction']:.0%}; "
+                      f"mean peak speed: {diagnostics['mean_peak_speed']:.2f} m/s", flush=True)
             if not json.loads((trial / "training.json").read_text())["completed_requested_steps"]:
                 reason = "time_limit_or_stop_file"
                 break
@@ -214,6 +274,7 @@ def main():
     parser.add_argument("--evaluation-episodes", type=int, default=8)
     parser.add_argument("--seed", type=int, default=501)
     parser.add_argument("--proposer", choices=["local", "openai"], default="local")
+    parser.add_argument("--reward-mode", choices=["fixed", "adaptive"], default="fixed")
     parser.add_argument("--api-budget", type=float, default=20.)
     parser.add_argument("--budget-ledger", type=Path, default=Path(".api-budget.json"))
     parser.add_argument("--memory-file", type=Path, default=DEFAULT_MEMORY)
@@ -226,7 +287,7 @@ def main():
         os.environ["OPENAI_API_KEY"] = getpass.getpass("OpenAI API key (hidden; not saved): ")
     result = run_curriculum(args.output, args.source, blocks=args.blocks, max_steps=args.max_steps,
         max_minutes=args.max_minutes, seed=args.seed, validation_episodes=args.evaluation_episodes,
-        proposer=args.proposer, api_budget=args.api_budget, budget_ledger=args.budget_ledger, memory_file=args.memory_file)
+        proposer=args.proposer, reward_mode=args.reward_mode, api_budget=args.api_budget, budget_ledger=args.budget_ledger, memory_file=args.memory_file)
     print(json.dumps({"completed_blocks": result["completed_blocks"], "stop_reason": result["stop_reason"], "output": str(args.output)}, indent=2))
     if result["stop_reason"].startswith("error:"):
         raise SystemExit(1)

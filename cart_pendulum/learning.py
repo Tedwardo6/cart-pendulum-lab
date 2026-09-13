@@ -53,6 +53,7 @@ def evaluate(policy, config, seeds, trajectory=None, *, evaluation_version=None,
         history = [[0., *env.state, 0.]]
         total_reward, max_angle, force_squared, elapsed = 0., 0., 0., 0.
         common_total = 0.
+        peak_x, peak_speed, saturated_time, edge_time = abs(env.state[0]), 0., 0., 0.
         while True:
             action = np.zeros(1) if policy is None else policy.predict(obs, deterministic=True)[0]
             obs, reward, terminated, truncated, info = env.step(action)
@@ -63,6 +64,10 @@ def evaluate(policy, config, seeds, trajectory=None, *, evaluation_version=None,
                 common_total += common_score(env.state, config) * delta
             force_squared += info["force"]**2 * delta
             elapsed = info["time"]
+            peak_x = max(peak_x, abs(env.state[0]))
+            peak_speed = max(peak_speed, abs(env.state[config.n_links + 1]))
+            saturated_time += delta * (abs(info["force"]) >= .95 * config.max_force)
+            edge_time += delta * (abs(env.state[0]) >= .8 * config.track_limit)
             history.append([elapsed, *env.state, info["force"]])
             if terminated or truncated:
                 break
@@ -70,6 +75,11 @@ def evaluate(policy, config, seeds, trajectory=None, *, evaluation_version=None,
                         "success": info["success"], "end_reason": info["end_reason"],
                         "upright_time": info["upright_time"], "final_hold": info["final_hold"],
                         "common_score": common_total / config.duration,
+                        "peak_cart_displacement": float(peak_x), "peak_cart_speed": float(peak_speed),
+                        "force_saturation_fraction": float(saturated_time / max(elapsed, 1e-9)),
+                        "near_edge_fraction": float(edge_time / max(elapsed, 1e-9)),
+                        "final_cart_position": float(env.state[0]),
+                        "final_cart_speed": float(env.state[config.n_links + 1]),
                         "max_angle_error": max_angle, "rms_force": float(np.sqrt(force_squared / max(elapsed, 1e-9)))})
         if trajectory is not None and index == 0:
             header = ["time", "x", *[f"theta_{i+1}" for i in range(config.n_links)],
@@ -85,6 +95,12 @@ def evaluate(policy, config, seeds, trajectory=None, *, evaluation_version=None,
     if evaluation_version is not None:
         metrics.update(evaluation_version=evaluation_version,
                        mean_common_score=float(np.mean([r["common_score"] for r in results])))
+    metrics["cart_diagnostics"] = {
+        "track_exit_rate": float(np.mean([r["end_reason"] == "track_limit" for r in results])),
+        "mean_peak_displacement": float(np.mean([r["peak_cart_displacement"] for r in results])),
+        "mean_peak_speed": float(np.mean([r["peak_cart_speed"] for r in results])),
+        "mean_force_saturation_fraction": float(np.mean([r["force_saturation_fraction"] for r in results])),
+        "mean_near_edge_fraction": float(np.mean([r["near_edge_fraction"] for r in results]))}
     return metrics
 
 
@@ -141,6 +157,13 @@ def train(config, network, steps, seed, output, deadline=None, checkpoint=None, 
                  learning_rate=network.learning_rate, gamma=network.gamma,
                  ent_coef=network.entropy_coefficient, n_epochs=network.n_epochs,
                  n_steps=512, batch_size=64, seed=seed, device="cpu", verbose=0)
+    if training_spec is not None:
+        target_kl = training_spec.get("ppo_target_kl")
+        if target_kl is not None and (type(target_kl) not in (int, float) or not np.isfinite(target_kl) or not .001 <= target_kl <= .05):
+            env.close()
+            raise ValueError("PPO target KL must be in [.001, .05].")
+        # Limit update size within a rollout; recovery evaluation still decides acceptance.
+        policy.target_kl = target_kl
     initial_steps, initial_updates = policy.num_timesteps, policy._n_updates
     write_json(output / "config.json", {"environment": asdict(config), "network": asdict(network),
                "seed": seed, "requested_steps": initial_steps + steps,
@@ -166,6 +189,7 @@ def train(config, network, steps, seed, output, deadline=None, checkpoint=None, 
                "gradient_updates": policy._n_updates,
                "added_gradient_updates": policy._n_updates - initial_updates,
                "seconds": time.monotonic() - started, "interrupted": interrupted,
+               "ppo_target_kl": policy.target_kl,
                "completed_requested_steps": policy.num_timesteps >= initial_steps + steps})
     if failure is not None:
         raise failure

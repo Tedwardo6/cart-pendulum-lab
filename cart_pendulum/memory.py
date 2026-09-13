@@ -22,7 +22,7 @@ class ExperimentMemory:
     def __init__(self, path=DEFAULT_MEMORY):
         self.path = Path(path)
 
-    def records(self, config, evaluation_version=None):
+    def records(self, config, evaluation_version=None, curriculum_version=None):
         if not self.path.exists():
             return []
         data = json.loads(self.path.read_text())
@@ -30,6 +30,7 @@ class ExperimentMemory:
             raise ValueError("Unsupported experiment memory version.")
         return [r for r in data["records"] if r["task_version"] == task_version(config)
                 and r.get("evaluation_version") == evaluation_version
+                and (curriculum_version is None or (r.get("training_spec") or {}).get("curriculum_version") == curriculum_version)
                 and asdict(EnvConfig(**r["environment"])) == asdict(config)]
 
     def remember(self, run, record):
@@ -52,7 +53,7 @@ class ExperimentMemory:
                  "probes": record.get("probes"), "accepted_for_training": record.get("accepted_for_training"),
                  "validation_seeds": [e["seed"] for e in metrics["episodes"]],
                  "validation": {k: metrics[k] for k in ("task", "mean_duration", "mean_return", "success_rate",
-                                                       "mean_upright_time", "mean_final_hold", "evaluation_version", "mean_common_score") if k in metrics},
+                                                       "mean_upright_time", "mean_final_hold", "evaluation_version", "mean_common_score", "cart_diagnostics") if k in metrics},
                  "source_run": str(run.resolve()), "source_trial": record["trial"]}
         self._save(entry)
 

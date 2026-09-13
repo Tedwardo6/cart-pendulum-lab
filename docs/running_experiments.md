@@ -26,7 +26,7 @@ For a fast end-to-end check, use `--trials 2 --steps 512 --evaluation-episodes 2
 
 ## Start hanging down and learn to swing up
 
-If you already have a successful balancing controller, the newer [curriculum and reward-search workflow](curriculum.md) can transfer its actor weights, gradually increase reset difficulty, and optionally let the API tune training rewards under a fixed evaluation objective. The commands below remain the original fresh-weight swing-up baseline.
+If you already have a successful balancing controller, the newer [curriculum and reward-search workflow](curriculum.md) can transfer its actor weights, gradually increase reset difficulty, protect the best recovery checkpoints, and optionally let the API tune training settings under a fixed evaluation objective. Rewards are frozen by default; `--reward-mode adaptive` enables reward search. The commands below remain the original fresh-weight swing-up baseline.
 
 Add `--task swingup` to start every rod near downward (angle zero). The default `--task balance` still starts near upright (angle pi). Both tasks use the same cart force, physical model and observations. One through four rods are supported with `--links`.
 

@@ -6,6 +6,10 @@ from .environment import CartPendulumEnv
 
 EVALUATION_VERSION = "swingup-fixed-v2"
 STAGES = ((5, .1), (15, .25), (30, .5), (60, 1.), (100, 1.5), (140, 2.), (180, 2.))
+CURRICULUM_VERSION = "recovery-v2"
+RECOVERY_STAGES = ((3, 0.), (5, 0.), (7.5, 0.), (10, 0.), (12.5, 0.), (15, 0.),
+                   (15, .1), (15, .25), (20, .25), (25, .25), (30, .25), (30, .5),
+                   (45, .5), (60, .5), (60, 1.), (90, 1.), (120, 1.), (150, 1.), (180, 1.), (180, 2.))
 
 
 @dataclass(frozen=True)
@@ -16,10 +20,11 @@ class RewardConfig:
     near_top_speed: float = .1
     effort: float = .002
     centering: float = .05
+    braking: float = 0.  # Zero preserves old serialized reward configurations.
 
     def __post_init__(self):
         bounds = {"progress": (.05, .5), "together": (.5, 3.), "catch": (.5, 3.),
-                  "near_top_speed": (0., .5), "effort": (0., .02), "centering": (0., .2)}
+                  "near_top_speed": (0., .5), "effort": (0., .02), "centering": (0., .2), "braking": (0., .5)}
         for key, (low, high) in bounds.items():
             value = getattr(self, key)
             if type(value) not in (int, float) or not np.isfinite(value) or not low <= value <= high:
@@ -32,10 +37,14 @@ class ResetConfig:
     easy_fraction: float = .2
     hanging_fraction: float = .1
     frontier_only: bool = False
+    schedule: str = "legacy-v1"
 
     def __post_init__(self):
-        if type(self.stage) is not int or not 0 <= self.stage < len(STAGES):
-            raise ValueError("Curriculum stage must be 0–6.")
+        if self.schedule not in ("legacy-v1", CURRICULUM_VERSION):
+            raise ValueError("Unknown recovery schedule.")
+        stages = STAGES if self.schedule == "legacy-v1" else RECOVERY_STAGES
+        if type(self.stage) is not int or not 0 <= self.stage < len(stages):
+            raise ValueError(f"Curriculum stage must be 0–{len(stages)-1}.")
         for value in (self.easy_fraction, self.hanging_fraction):
             if not np.isfinite(value) or not 0 <= value <= 1:
                 raise ValueError("Reset fractions must be in [0, 1].")
@@ -54,11 +63,14 @@ def state_features(state, config):
 
 
 def shaped_reward(state, config, force_fraction, terminated, elapsed, reward):
-    progress, together, catch, speed, _ = state_features(state, config)
+    progress, together, catch, speed, cart_speed = state_features(state, config)
+    edge = np.clip((abs(state[0]) / config.track_limit - .5) / .5, 0., 1.)
+    outward_speed = max(0., np.sign(state[0]) * cart_speed)
     value = (reward.progress * progress + reward.together * together + reward.catch * catch
              - reward.near_top_speed * together * min(speed / 25, 20)
              - reward.effort * force_fraction**2
-             - reward.centering * (state[0] / config.track_limit)**2)
+             - reward.centering * (state[0] / config.track_limit)**2
+             - reward.braking * edge**2 * min(outward_speed**2, 25.))
     return float(value * elapsed / config.control_dt - 5 * terminated)
 
 
@@ -84,7 +96,8 @@ class CurriculumEnv(CartPendulumEnv):
             kind = "hanging"
         else:
             easy = not r.frontier_only and draw < r.hanging_fraction + r.easy_fraction
-            angle, speed = (np.rad2deg(c.initial_angle_range), 0.) if easy else STAGES[r.stage]
+            stages = STAGES if r.schedule == "legacy-v1" else RECOVERY_STAGES
+            angle, speed = (np.rad2deg(c.initial_angle_range), 0.) if easy else stages[r.stage]
             deviations = self.np_random.uniform(-np.deg2rad(angle), np.deg2rad(angle), c.n_links)
             if r.frontier_only:
                 # Require at least one rod near the current difficulty boundary.
