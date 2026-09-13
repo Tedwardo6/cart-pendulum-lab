@@ -105,3 +105,11 @@ python -m cart_pendulum.evaluate runs/double-001 \
 ```
 
 This produces numerical metrics and a CSV trajectory. No HTML, rendering, OpenAI connection, or ongoing API access is needed to run the trained network.
+
+## Watch saved evaluations
+
+```sh
+python -m examples.render_experiment runs/double-001 --output runs/double-001-replay
+```
+
+This saves `comparison.gif` with each completed trial side by side, plus `final-frame.png`. It replays the first saved validation episode for each candidate at real-time speed, freezing each panel at its episode end. These individual episode durations can differ from the reported averages. No training or API request is needed. Choose a new replay output folder each time; the original run stays intact.
