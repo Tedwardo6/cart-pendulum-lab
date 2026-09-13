@@ -66,6 +66,8 @@ Memory retains each completed trial's architecture, training settings, rationale
 
 The API receives a bounded selection of up to eight best/recent completed results and three recent failures. All records remain on disk, even when omitted from an individual request. Only records with identical environment settings and the same task version are eligible, so double, triple and quadruple pendulums have separate evidence. Different training budgets and evaluation seeds are included explicitly so the proposer can account for them. Historical rationales are hypotheses, not established conclusions.
 
+The shared file is a storage container, not a shared prompt across tasks. Filtering separates `balance` from `swingup`, rod count, masses, length, force limit, timing, track boundaries, initial-angle range and success thresholds. Architectures and learning hyperparameters intentionally remain comparable within the same task/environment; separating those would prevent the API from learning which architectures perform better. Training budgets and seeds are supplied as context rather than used to exclude records. Reward/dynamics changes require a new task version before reusing evidence.
+
 This is persistent experiment context, not a change to the OpenAI model's weights. Each candidate still trains from fresh weights. Held-out test results are saved in the run folder but excluded from proposal memory to keep them separate from architecture selection.
 
 Use `--memory-file /absolute/path/to/experiment_memory.json` if launching from another working directory or sharing history between checkouts. Back up both the memory file and the run folders: the memory is an index of evidence, not a replacement for model files. Import completed experiments created before this feature with:
@@ -125,6 +127,16 @@ python -m cart_pendulum.evaluate runs/double-001 \
 This produces numerical metrics and a CSV trajectory. No HTML, rendering, OpenAI connection, or ongoing API access is needed to run the trained network.
 
 ## Watch saved evaluations
+
+For a GIF of the experiment's selected **best controller**, run:
+
+```sh
+python -m cart_pendulum.render_best runs/double-001
+```
+
+It writes `renders/best.gif` inside that experiment folder and a `best.json` sidecar identifying the source episode. It replays the first saved held-out episode; if the run stopped before saving that episode, it uses the winner's first validation episode instead. The best controller is selected by the experiment's task-specific validation rules; this command does not cherry-pick its best episode. Both balance and swing-up are supported, with no API call, retraining, or new simulation required. Repeating the command replaces only the generated GIF and its sidecar. For a custom location, add `--output runs/my-best.gif`. Install the `render` extra if needed.
+
+To compare all completed candidates side by side:
 
 ```sh
 python -m examples.render_experiment runs/double-001 --output runs/double-001-replay
