@@ -55,7 +55,7 @@ def render_trajectories(records, output, preview=None):
     fig.suptitle("Saved controller evaluations · real-time playback", color="white", fontsize=16)
     fig.text(.5, .025, "Each panel freezes when its episode ends.\nThese are individual episodes, not average scores.",
              ha="center", color="#aab9cc", fontsize=10)
-    fig.tight_layout(rect=(0, .06, 1, .92))
+    fig.tight_layout(rect=(0, .13, 1, .92))
     fps = 25
     end = max(p[0][-1, 0] for p in panels)
 
